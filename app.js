@@ -3,7 +3,7 @@ const { createProxyMiddleware } = require('http-proxy-middleware');
 const path = require('path');
 
 const app = express();
-const PORT = 80; // Listen on port 80
+const PORT = 3000; // Listen on port 80
 
 // Set EJS as templating engine
 app.set('view engine', 'ejs');
