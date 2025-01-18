@@ -3,7 +3,7 @@ const { createProxyMiddleware } = require('http-proxy-middleware');
 const path = require('path');
 
 const app = express();
-const PORT = 3000; // Listen on port 80
+const PORT = 3000; // Listen on port 3000
 
 // Set EJS as templating engine
 app.set('view engine', 'ejs');
@@ -18,7 +18,7 @@ app.get('/', (req, res) => {
 });
 
 // Proxy Endpoint
-app.get('/proxy', (req, res, next) => {
+app.use('/proxy', (req, res, next) => {
     const targetUrl = req.query.url;
 
     if (!targetUrl) {
@@ -33,14 +33,11 @@ app.get('/proxy', (req, res, next) => {
         return res.status(400).send('Invalid URL.');
     }
 
-
     // Create Proxy Middleware
-    return createProxyMiddleware({
-        target: targetUrl,
+    createProxyMiddleware({
+        target: parsedUrl.origin,
         changeOrigin: true,
-        pathRewrite: {
-            '^/proxy': '',
-        },
+        pathRewrite: (path, req) => path.replace('/proxy', parsedUrl.pathname),
         onError: (err, req, res) => {
             console.error(err);
             res.status(500).send('Proxy error.');

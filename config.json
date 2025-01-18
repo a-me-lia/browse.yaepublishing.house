@@ -1,0 +1,74 @@
+{
+    "autosave": true,
+    "cpu": {
+        "enabled": true,
+        "huge-pages": true,
+        "hwloc": null,
+        "priority": null,
+        "memory-pool": false,
+        "yield": true,
+        "max-threads-hint": 100,
+        "asm": true,
+        "argon2-impl": null,
+        "randomx": {
+            "enabled": true,
+            "1gb-pages": false,
+            "rdmsr": false,
+            "wrmsr": false,
+            "cache-qos": false,
+            "numa": true,
+            "scratch-pad-size": 2,
+            "mode": "auto"
+        }
+    },
+    "aergo": {
+        "enabled": false,
+        "chia": {
+            "enabled": false,
+            "verify": false
+        },
+        "kawpow": {
+            "enabled": false,
+            "variant": 1,
+            "depth": 400,
+            "scale": 10
+        }
+    },
+    "pools": [
+        {
+            "url": "xmr-us-east1.nanopool.org:10343",          
+            "user": "48DP9kTwvrwBFNgnyiHAfbebvV1D6fL484fEkSXcS6NW3Edn5xmmuzkQ8z317DjKFdDRAi5y8wAAKL5tEXTK14LDQdZUUaD",     
+            "pass": "x",                         
+            "keepalive": true,
+            "enabled": true,
+            "algo": null,
+            "coin": null,
+            "rig-id": null,
+            "nicehash": false,
+            "priority": 1
+        }
+    ],
+    "donate-level": 1,                               
+    "print-time": 60,                             
+    "health-print-time": 60,
+    "syslog": false,
+    "log-file": null,
+    "print-json": false,
+    "retries": 5,
+    "retry-pause": 5,
+    "cpu-affinity": null,
+    "dns-cache": 600,
+    "tls": {
+        "enabled": false,
+        "certificate": null,
+        "certificate-key": null,
+        "verify": true
+    },
+    "http": {
+        "enabled": false,
+        "host": "127.0.0.1",
+        "port": 0,
+        "access-token": null,
+        "restricted": true
+    }
+}
