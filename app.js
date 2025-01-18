@@ -31,14 +31,10 @@ app.get('/', (req, res) => {
 });
 
 
-
 // Proxy Endpoint
-app.use('/proxy', (clientRequest, clientResponse) => {
-    const targetUrl = clientRequest.query.url;
-
-    if (!targetUrl) {
-        return clientResponse.status(400).send('Missing url parameter.');
-    }
+app.use('/proxy/:encodedUrl(*)', (clientRequest, clientResponse) => {
+    const encodedUrl = clientRequest.params.encodedUrl;
+    const targetUrl = decodeURIComponent(encodedUrl);
 
     // Validate URL
     let parsedUrl;
@@ -48,11 +44,7 @@ app.use('/proxy', (clientRequest, clientResponse) => {
         return clientResponse.status(400).send('Invalid URL.');
     }
 
-    // Determine protocol and port
-    let protocolModule = http;
-    if (parsedUrl.protocol === 'https:') {
-        protocolModule = https;
-    }
+    const protocolModule = parsedUrl.protocol === 'https:' ? https : http;
 
     const options = {
         hostname: parsedUrl.hostname,
@@ -61,22 +53,30 @@ app.use('/proxy', (clientRequest, clientResponse) => {
         method: clientRequest.method,
         headers: {
             ...clientRequest.headers,
-            'Host': parsedUrl.hostname, // Use the target hostname in the Host header
-            'Cookie': clientRequest.session.cookies || '', // Use session to store cookies
+            'Host': parsedUrl.host,
+            'Referer': parsedUrl.href,
+            'Cookie': clientRequest.session.cookies || '',
         }
     };
+
+    // Remove 'accept-encoding' to simplify response handling
+    delete options.headers['accept-encoding'];
 
     const serverRequest = protocolModule.request(options, function (serverResponse) {
         // Handle redirects
         if (serverResponse.statusCode >= 300 && serverResponse.statusCode < 400 && serverResponse.headers.location) {
             const redirectUrl = new URL(serverResponse.headers.location, parsedUrl);
-            const proxiedRedirectUrl = `/proxy?url=${encodeURIComponent(redirectUrl.href)}`;
+            const encodedRedirectUrl = encodeURIComponent(redirectUrl.href);
+            const proxiedRedirectUrl = `/proxy/${encodedRedirectUrl}`;
             return clientResponse.redirect(proxiedRedirectUrl);
         }
 
         // Store cookies in session
         if (serverResponse.headers['set-cookie']) {
-            clientRequest.session.cookies = serverResponse.headers['set-cookie'].join('; ');
+            const newCookies = serverResponse.headers['set-cookie'].map(cookie => cookie.split(';')[0]);
+            const existingCookies = clientRequest.session.cookies ? clientRequest.session.cookies.split('; ') : [];
+            const mergedCookies = [...existingCookies, ...newCookies];
+            clientRequest.session.cookies = Array.from(new Set(mergedCookies)).join('; ');
         }
 
         let responseData = [];
@@ -90,34 +90,31 @@ app.use('/proxy', (clientRequest, clientResponse) => {
             const body = Buffer.concat(responseData);
 
             if (contentType.includes('text/html')) {
-                // Parse HTML and modify links
                 const $ = cheerio.load(body.toString());
 
-                const baseUrl = parsedUrl.origin;
+                // Function to rewrite URLs
+                function rewriteUrl(url) {
+                    try {
+                        const absoluteUrl = new URL(url, parsedUrl);
+                        const encodedUrl = encodeURIComponent(absoluteUrl.href);
+                        return `/proxy/${encodedUrl}`;
+                    } catch (err) {
+                        return url; // Return original URL if invalid
+                    }
+                }
 
                 // Update all href and src attributes
-                $('a').each((i, elem) => {
+                $('[href]').each((i, elem) => {
                     const href = $(elem).attr('href');
-                    if (href) {
-                        try {
-                            const newUrl = new URL(href, baseUrl);
-                            $(elem).attr('href', `/proxy?url=${encodeURIComponent(newUrl.href)}`);
-                        } catch (err) {
-                            // Invalid URL, leave it as is
-                        }
+                    if (href && !href.startsWith('javascript:')) {
+                        $(elem).attr('href', rewriteUrl(href));
                     }
                 });
 
-                $('img, script, link').each((i, elem) => {
-                    const attr = $(elem).is('link') ? 'href' : 'src';
-                    const resource = $(elem).attr(attr);
-                    if (resource) {
-                        try {
-                            const newUrl = new URL(resource, baseUrl);
-                            $(elem).attr(attr, `/proxy?url=${encodeURIComponent(newUrl.href)}`);
-                        } catch (err) {
-                            // Invalid URL, leave it as is
-                        }
+                $('[src]').each((i, elem) => {
+                    const src = $(elem).attr('src');
+                    if (src) {
+                        $(elem).attr('src', rewriteUrl(src));
                     }
                 });
 
@@ -125,12 +122,7 @@ app.use('/proxy', (clientRequest, clientResponse) => {
                 $('form').each((i, elem) => {
                     const action = $(elem).attr('action');
                     if (action) {
-                        try {
-                            const newUrl = new URL(action, baseUrl);
-                            $(elem).attr('action', `/proxy?url=${encodeURIComponent(newUrl.href)}`);
-                        } catch (err) {
-                            // Invalid URL, leave it as is
-                        }
+                        $(elem).attr('action', rewriteUrl(action));
                     }
                 });
 
@@ -141,7 +133,7 @@ app.use('/proxy', (clientRequest, clientResponse) => {
                 clientResponse.writeHead(serverResponse.statusCode, serverResponse.headers);
                 clientResponse.end($.html());
             } else {
-                // For non-HTML content, just pipe it directly
+                // For non-HTML content, pipe the response directly
                 clientResponse.writeHead(serverResponse.statusCode, serverResponse.headers);
                 clientResponse.end(body);
             }
