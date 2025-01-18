@@ -1,5 +1,36 @@
+/* eslint-disable @typescript-eslint/no-var-requires */
+const express = require('express');
+const path = require('path');
+const https = require('https');
+const http = require('http');
 // ... (other requires)
 const cheerio = require('cheerio');
+const session = require('express-session');
+
+const app = express();
+const PORT = 3000; // Listen on port 3000
+
+// Set EJS as templating engine
+app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views'));
+
+// Serve static files from "public" directory
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Use session middleware to maintain persistent sessions
+app.use(session({
+    secret: 'your-secret-key',
+    resave: false,
+    saveUninitialized: true,
+    cookie: { secure: false } // Set to true if using HTTPS
+}));
+
+// Homepage with Proxy Form
+app.get('/', (req, res) => {
+    res.render('index');
+});
+
+
 
 // Proxy Endpoint
 app.use('/proxy', (clientRequest, clientResponse) => {
@@ -126,4 +157,8 @@ app.use('/proxy', (clientRequest, clientResponse) => {
 
     // Pipe the client request body to the server request
     clientRequest.pipe(serverRequest, { end: true });
+});
+// Start the Server
+app.listen(PORT, () => {
+    console.log(`Proxy server is running on port ${PORT}`);
 });
