@@ -52,8 +52,7 @@ app.use('/proxy', (clientRequest, clientResponse) => {
         path: parsedUrl.pathname + parsedUrl.search,
         method: clientRequest.method,
         headers: {
-            ...clientRequest.headers,
-            'Host': parsedHost
+            'User-Agent': clientRequest.headers['user-agent'],
         }
     };
 
@@ -70,14 +69,10 @@ app.use('/proxy', (clientRequest, clientResponse) => {
                 const proxiedRedirectUrl = `/proxy?url=${encodeURIComponent(redirectUrl.href)}`;
                 clientResponse.redirect(proxiedRedirectUrl);
             } else {
-                // Remove or adjust content-security-policy header
-                delete serverResponse.headers['content-security-policy'];
-
                 // Rewrite links in the response body to be proxied
-                body = body.replace(/(href|src|action)="(http[s]?:\/\/[^"]+)"/g, (match, attr, p1) => {
-                    return `${attr}="/proxy?url=${encodeURIComponent(p1)}"`;
+                body = body.replace(/href="(http[s]?:\/\/[^"]+)"/g, (match, p1) => {
+                    return `href="/proxy?url=${encodeURIComponent(p1)}"`;
                 });
-
                 clientResponse.writeHead(serverResponse.statusCode, serverResponse.headers);
                 clientResponse.end(body);
             }
