@@ -57,21 +57,33 @@ app.use('/proxy', (clientRequest, clientResponse) => {
 
     const protocolModule = parsedUrl.protocol === 'https:' ? https : http;
 
+    // Build headers, including forwarding necessary headers
+    const headers = {
+        'Host': parsedUrl.hostname,
+        'User-Agent': clientRequest.headers['user-agent'] || '',
+        'Accept': clientRequest.headers['accept'] || '*/*',
+        'Accept-Language': clientRequest.headers['accept-language'] || '',
+        'Referer': parsedUrl.href, // Adjust if necessary
+        'Cookie': clientRequest.session.cookies || '',
+    };
+
+    // Include any 'sec-ch-*' headers from the client request
+    for (const headerName in clientRequest.headers) {
+        if (headerName.toLowerCase().startsWith('sec-ch-')) {
+            headers[headerName] = clientRequest.headers[headerName];
+        }
+    }
+
+    // Remove 'accept-encoding' to prevent compressed responses (simplifies parsing)
+    delete headers['accept-encoding'];
+
     const options = {
         hostname: parsedUrl.hostname,
         port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
         path: parsedUrl.pathname + parsedUrl.search,
         method: clientRequest.method,
-        headers: {
-            ...clientRequest.headers,
-            'Host': parsedUrl.hostname, // Use target hostname
-            'Referer': parsedUrl.href,
-            'Cookie': clientRequest.session.cookies || '',
-        }
+        headers: headers,
     };
-
-    // Remove 'accept-encoding' to prevent compressed responses (simplifies parsing)
-    delete options.headers['accept-encoding'];
 
     const serverRequest = protocolModule.request(options, function (serverResponse) {
         // Handle redirects
@@ -102,7 +114,12 @@ app.use('/proxy', (clientRequest, clientResponse) => {
 
             if (contentType.includes('text/html')) {
                 // Parse and modify the HTML content
-                const $ = cheerio.load(body.toString());
+                let htmlContent = body.toString();
+
+                // Remove <base> tags to prevent incorrect URL resolutions
+                htmlContent = htmlContent.replace(/<base[^>]*>/gi, '');
+
+                const $ = cheerio.load(htmlContent);
 
                 // Function to rewrite URLs to go through the proxy
                 function rewriteUrl(url) {
@@ -115,31 +132,33 @@ app.use('/proxy', (clientRequest, clientResponse) => {
                     }
                 }
 
-                // Rewrite all href attributes
-                $('a[href]').each((i, elem) => {
-                    const href = $(elem).attr('href');
-                    if (href && !href.startsWith('javascript:')) {
-                        $(elem).attr('href', rewriteUrl(href));
-                    }
+                // List of attributes containing URLs to rewrite
+                const attributesToRewrite = ['href', 'src', 'action', 'data-href', 'data-src', 'data-url'];
+
+                attributesToRewrite.forEach(attr => {
+                    $(`[${attr}]`).each((i, elem) => {
+                        const value = $(elem).attr(attr);
+                        if (value && !value.startsWith('javascript:') && !value.startsWith('data:')) {
+                            $(elem).attr(attr, rewriteUrl(value));
+                        }
+                    });
                 });
 
-                // Rewrite all src attributes
-                $('[src]').each((i, elem) => {
-                    const src = $(elem).attr('src');
-                    if (src) {
-                        $(elem).attr('src', rewriteUrl(src));
-                    }
+                // Rewrite CSS URLs in style tags and attributes
+                $('style').each((i, elem) => {
+                    let cssContent = $(elem).html();
+                    cssContent = cssContent.replace(/url\(['"]?([^'"\)]+)['"]?\)/g, (match, url) => {
+                        return `url('${rewriteUrl(url)}')`;
+                    });
+                    $(elem).html(cssContent);
                 });
 
-                // Rewrite form actions
-                $('form[action]').each((i, elem) => {
-                    const action = $(elem).attr('action');
-                    if (action !== undefined) { // Handle forms without an action
-                        $(elem).attr('action', rewriteUrl(action));
-                    } else {
-                        // If action is not specified, default to current URL
-                        $(elem).attr('action', `/proxy?url=${encodeURIComponent(parsedUrl.href)}`);
-                    }
+                $('[style]').each((i, elem) => {
+                    let styleContent = $(elem).attr('style');
+                    styleContent = styleContent.replace(/url\(['"]?([^'"\)]+)['"]?\)/g, (match, url) => {
+                        return `url('${rewriteUrl(url)}')`;
+                    });
+                    $(elem).attr('style', styleContent);
                 });
 
                 // Remove Content-Length header since content size may have changed
