@@ -4,7 +4,7 @@ const path = require('path');
 const https = require('https');
 const http = require('http');
 const session = require('express-session');
-const cheerio = require('cheerio'); // Added to parse and modify HTML
+const cheerio = require('cheerio');
 
 const app = express();
 const PORT = 3000; // Listen on port 3000
@@ -32,18 +32,18 @@ app.get('/', (req, res) => {
 // Proxy Endpoint
 app.use('/proxy', (clientRequest, clientResponse) => {
     let targetUrl = clientRequest.query.url;
-    let protocol = clientRequest.query.protocol || '';
+    let protocol = clientRequest.query.protocol;
 
     if (!targetUrl) {
         return clientResponse.status(400).send('Missing url parameter.');
     }
 
-    // Append protocol if not included
+    // If targetUrl doesn't have protocol, prepend protocol
     if (!/^https?:\/\//i.test(targetUrl)) {
         if (protocol) {
             targetUrl = protocol + targetUrl;
         } else {
-            targetUrl = 'http://'+ targetUrl; // Default to HTTP if no protocol specified
+            targetUrl = 'http://' + targetUrl;
         }
     }
 
@@ -78,9 +78,6 @@ app.use('/proxy', (clientRequest, clientResponse) => {
         if (serverResponse.statusCode >= 300 && serverResponse.statusCode < 400 && serverResponse.headers.location) {
             const redirectUrl = new URL(serverResponse.headers.location, parsedUrl);
             let proxiedRedirectUrl = `/proxy?url=${encodeURIComponent(redirectUrl.href)}`;
-            if (protocol) {
-                proxiedRedirectUrl += `&protocol=${encodeURIComponent(redirectUrl.protocol)}`;
-            }
             return clientResponse.redirect(proxiedRedirectUrl);
         }
 
@@ -112,9 +109,6 @@ app.use('/proxy', (clientRequest, clientResponse) => {
                     try {
                         const absoluteUrl = new URL(url, parsedUrl);
                         let newUrl = `/proxy?url=${encodeURIComponent(absoluteUrl.href)}`;
-                        if (protocol) {
-                            newUrl += `&protocol=${encodeURIComponent(absoluteUrl.protocol)}`;
-                        }
                         return newUrl;
                     } catch (e) {
                         return url; // Return original URL if parsing fails
@@ -140,8 +134,11 @@ app.use('/proxy', (clientRequest, clientResponse) => {
                 // Rewrite form actions
                 $('form[action]').each((i, elem) => {
                     const action = $(elem).attr('action');
-                    if (action) {
+                    if (action !== undefined) { // Handle forms without an action
                         $(elem).attr('action', rewriteUrl(action));
+                    } else {
+                        // If action is not specified, default to current URL
+                        $(elem).attr('action', `/proxy?url=${encodeURIComponent(parsedUrl.href)}`);
                     }
                 });
 
