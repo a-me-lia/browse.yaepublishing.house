@@ -53,8 +53,7 @@ app.use('/proxy', (clientRequest, clientResponse) => {
         method: clientRequest.method,
         headers: {
             'User-Agent': clientRequest.headers['user-agent'],
-        },
-        followRedirect: true // Allow following redirects
+        }
     };
 
     const serverRequest = parsedSSL.request(options, function (serverResponse) {
@@ -67,8 +66,13 @@ app.use('/proxy', (clientRequest, clientResponse) => {
             if (serverResponse.statusCode >= 300 && serverResponse.statusCode < 400 && serverResponse.headers.location) {
                 // Handle redirects
                 const redirectUrl = new URL(serverResponse.headers.location, parsedUrl);
-                clientResponse.redirect(redirectUrl.href);
+                const proxiedRedirectUrl = `/proxy?url=${encodeURIComponent(redirectUrl.href)}`;
+                clientResponse.redirect(proxiedRedirectUrl);
             } else {
+                // Rewrite links in the response body to be proxied
+                body = body.replace(/href="(http[s]?:\/\/[^"]+)"/g, (match, p1) => {
+                    return `href="/proxy?url=${encodeURIComponent(p1)}"`;
+                });
                 clientResponse.writeHead(serverResponse.statusCode, serverResponse.headers);
                 clientResponse.end(body);
             }
