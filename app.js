@@ -53,31 +53,33 @@ app.use('/proxy', (clientRequest, clientResponse) => {
         method: clientRequest.method,
         headers: {
             ...clientRequest.headers,
-            host: parsedHost
+            'Host': parsedHost
         }
     };
 
     const serverRequest = parsedSSL.request(options, function (serverResponse) {
-        let body = [];
+        let body = '';
         serverResponse.on('data', function (chunk) {
-            body.push(chunk);
+            body += chunk;
         });
 
         serverResponse.on('end', function () {
-            body = Buffer.concat(body);
             if (serverResponse.statusCode >= 300 && serverResponse.statusCode < 400 && serverResponse.headers.location) {
                 // Handle redirects
                 const redirectUrl = new URL(serverResponse.headers.location, parsedUrl);
                 const proxiedRedirectUrl = `/proxy?url=${encodeURIComponent(redirectUrl.href)}`;
                 clientResponse.redirect(proxiedRedirectUrl);
             } else {
+                // Remove or adjust content-security-policy header
+                delete serverResponse.headers['content-security-policy'];
+
                 // Rewrite links in the response body to be proxied
-                let bodyString = body.toString('utf8');
-                bodyString = bodyString.replace(/href="(http[s]?:\/\/[^"]+)"/g, (match, p1) => {
-                    return `href="/proxy?url=${encodeURIComponent(p1)}"`;
+                body = body.replace(/(href|src|action)="(http[s]?:\/\/[^"]+)"/g, (match, attr, p1) => {
+                    return `${attr}="/proxy?url=${encodeURIComponent(p1)}"`;
                 });
+
                 clientResponse.writeHead(serverResponse.statusCode, serverResponse.headers);
-                clientResponse.end(bodyString);
+                clientResponse.end(body);
             }
         });
     });
