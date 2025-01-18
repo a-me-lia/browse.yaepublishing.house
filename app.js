@@ -51,28 +51,12 @@ app.use('/proxy', (clientRequest, clientResponse) => {
         port: parsedPort,
         path: parsedUrl.pathname + parsedUrl.search,
         method: clientRequest.method,
-        headers: {
-            'User-Agent': clientRequest.headers['user-agent'],
-        },
-        followRedirect: true // Allow following redirects
+        headers: clientRequest.headers, // Forward all headers to support all content types
     };
 
     const serverRequest = parsedSSL.request(options, function (serverResponse) {
-        let body = '';
-        serverResponse.on('data', function (chunk) {
-            body += chunk;
-        });
-
-        serverResponse.on('end', function () {
-            if (serverResponse.statusCode >= 300 && serverResponse.statusCode < 400 && serverResponse.headers.location) {
-                // Handle redirects
-                const redirectUrl = new URL(serverResponse.headers.location, parsedUrl);
-                clientResponse.redirect(redirectUrl.href);
-            } else {
-                clientResponse.writeHead(serverResponse.statusCode, serverResponse.headers);
-                clientResponse.end(body);
-            }
-        });
+        clientResponse.writeHead(serverResponse.statusCode, serverResponse.headers);
+        serverResponse.pipe(clientResponse, { end: true });
     });
 
     serverRequest.on('error', (err) => {
@@ -80,7 +64,7 @@ app.use('/proxy', (clientRequest, clientResponse) => {
         clientResponse.status(500).send('Proxy error.');
     });
 
-    serverRequest.end();
+    clientRequest.pipe(serverRequest, { end: true });
 });
 
 // Start the Server
