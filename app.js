@@ -1,6 +1,8 @@
 const express = require('express');
-const { createProxyMiddleware } = require('http-proxy-middleware');
+const http = require('http');
+const https = require('https');
 const path = require('path');
+const { URL } = require('url');
 
 const app = express();
 const PORT = 3000; // Listen on port 3000
@@ -18,7 +20,7 @@ app.get('/', (req, res) => {
 });
 
 // Proxy Endpoint
-app.use('/proxy', (req, res, next) => {
+app.use('/proxy', (req, res) => {
     const targetUrl = req.query.url;
 
     if (!targetUrl) {
@@ -33,17 +35,31 @@ app.use('/proxy', (req, res, next) => {
         return res.status(400).send('Invalid URL.');
     }
 
-    // Create Proxy Middleware
-    createProxyMiddleware({
-        target: parsedUrl.origin,
-        changeOrigin: true,
-        pathRewrite: (path, req) => path.replace('/proxy', parsedUrl.pathname),
-        onError: (err, req, res) => {
-            console.error(err);
-            res.status(500).send('Proxy error.');
-        },
-        logLevel: 'silent', // Change to 'debug' for verbose logs
-    })(req, res, next);
+    const protocol = parsedUrl.protocol === 'https:' ? https : http;
+
+    const options = {
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
+        path: parsedUrl.pathname + (parsedUrl.search || ''),
+        method: req.method,
+        headers: req.headers
+    };
+
+    const proxyReq = protocol.request(options, (proxyRes) => {
+        res.writeHead(proxyRes.statusCode, proxyRes.headers);
+        proxyRes.pipe(res, {
+            end: true
+        });
+    });
+
+    proxyReq.on('error', (err) => {
+        console.error(err);
+        res.status(500).send('Proxy error.');
+    });
+
+    req.pipe(proxyReq, {
+        end: true
+    });
 });
 
 // Start the Server
