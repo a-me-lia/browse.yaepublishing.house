@@ -53,30 +53,21 @@ app.use('/proxy', (clientRequest, clientResponse) => {
         method: clientRequest.method,
         headers: {
             'User-Agent': clientRequest.headers['user-agent'],
+            'Cookie': clientRequest.headers['cookie'] || '', // Forward cookies for authentication
         }
     };
 
     const serverRequest = parsedSSL.request(options, function (serverResponse) {
-        let body = '';
-        serverResponse.on('data', function (chunk) {
-            body += chunk;
-        });
+        // Pipe the server response directly to the client response
+        clientResponse.writeHead(serverResponse.statusCode, serverResponse.headers);
+        serverResponse.pipe(clientResponse, { end: true });
 
-        serverResponse.on('end', function () {
-            if (serverResponse.statusCode >= 300 && serverResponse.statusCode < 400 && serverResponse.headers.location) {
-                // Handle redirects
-                const redirectUrl = new URL(serverResponse.headers.location, parsedUrl);
-                const proxiedRedirectUrl = `/proxy?url=${encodeURIComponent(redirectUrl.href)}`;
-                clientResponse.redirect(proxiedRedirectUrl);
-            } else {
-                // Rewrite links in the response body to be proxied
-                body = body.replace(/href="(http[s]?:\/\/[^"]+)"/g, (match, p1) => {
-                    return `href="/proxy?url=${encodeURIComponent(p1)}"`;
-                });
-                clientResponse.writeHead(serverResponse.statusCode, serverResponse.headers);
-                clientResponse.end(body);
-            }
-        });
+        // Handle redirects
+        if (serverResponse.statusCode >= 300 && serverResponse.statusCode < 400 && serverResponse.headers.location) {
+            const redirectUrl = new URL(serverResponse.headers.location, parsedUrl);
+            const proxiedRedirectUrl = `/proxy?url=${encodeURIComponent(redirectUrl.href)}`;
+            clientResponse.redirect(proxiedRedirectUrl);
+        }
     });
 
     serverRequest.on('error', (err) => {
@@ -84,7 +75,8 @@ app.use('/proxy', (clientRequest, clientResponse) => {
         clientResponse.status(500).send('Proxy error.');
     });
 
-    serverRequest.end();
+    // Pipe the client request body to the server request
+    clientRequest.pipe(serverRequest, { end: true });
 });
 
 // Start the Server
