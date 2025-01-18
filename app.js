@@ -58,21 +58,23 @@ app.use('/proxy', (clientRequest, clientResponse) => {
     };
 
     const serverRequest = parsedSSL.request(options, function (serverResponse) {
-        // Pipe the server response directly to the client response
-        clientResponse.writeHead(serverResponse.statusCode, serverResponse.headers);
-        serverResponse.pipe(clientResponse, { end: true });
-
         // Handle redirects
         if (serverResponse.statusCode >= 300 && serverResponse.statusCode < 400 && serverResponse.headers.location) {
             const redirectUrl = new URL(serverResponse.headers.location, parsedUrl);
             const proxiedRedirectUrl = `/proxy?url=${encodeURIComponent(redirectUrl.href)}`;
-            clientResponse.redirect(proxiedRedirectUrl);
+            return clientResponse.redirect(proxiedRedirectUrl);
         }
+
+        // Pipe the server response directly to the client response
+        clientResponse.writeHead(serverResponse.statusCode, serverResponse.headers);
+        serverResponse.pipe(clientResponse, { end: true });
     });
 
     serverRequest.on('error', (err) => {
         console.error(err);
-        clientResponse.status(500).send('Proxy error.');
+        if (!clientResponse.headersSent) {
+            clientResponse.status(500).send('Proxy error.');
+        }
     });
 
     // Pipe the client request body to the server request
