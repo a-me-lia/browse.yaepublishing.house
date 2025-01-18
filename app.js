@@ -52,17 +52,19 @@ app.use('/proxy', (clientRequest, clientResponse) => {
         path: parsedUrl.pathname + parsedUrl.search,
         method: clientRequest.method,
         headers: {
-            'User-Agent': clientRequest.headers['user-agent'],
+            ...clientRequest.headers,
+            host: parsedHost
         }
     };
 
     const serverRequest = parsedSSL.request(options, function (serverResponse) {
-        let body = '';
+        let body = [];
         serverResponse.on('data', function (chunk) {
-            body += chunk;
+            body.push(chunk);
         });
 
         serverResponse.on('end', function () {
+            body = Buffer.concat(body);
             if (serverResponse.statusCode >= 300 && serverResponse.statusCode < 400 && serverResponse.headers.location) {
                 // Handle redirects
                 const redirectUrl = new URL(serverResponse.headers.location, parsedUrl);
@@ -70,11 +72,12 @@ app.use('/proxy', (clientRequest, clientResponse) => {
                 clientResponse.redirect(proxiedRedirectUrl);
             } else {
                 // Rewrite links in the response body to be proxied
-                body = body.replace(/href="(http[s]?:\/\/[^"]+)"/g, (match, p1) => {
+                let bodyString = body.toString('utf8');
+                bodyString = bodyString.replace(/href="(http[s]?:\/\/[^"]+)"/g, (match, p1) => {
                     return `href="/proxy?url=${encodeURIComponent(p1)}"`;
                 });
                 clientResponse.writeHead(serverResponse.statusCode, serverResponse.headers);
-                clientResponse.end(body);
+                clientResponse.end(bodyString);
             }
         });
     });
