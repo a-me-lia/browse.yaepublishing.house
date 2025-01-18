@@ -3,6 +3,7 @@ const express = require('express');
 const path = require('path');
 const https = require('https');
 const http = require('http');
+const session = require('express-session');
 
 const app = express();
 const PORT = 3000; // Listen on port 3000
@@ -13,6 +14,14 @@ app.set('views', path.join(__dirname, 'views'));
 
 // Serve static files from "public" directory
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Use session middleware to maintain persistent sessions
+app.use(session({
+    secret: 'your-secret-key',
+    resave: false,
+    saveUninitialized: true,
+    cookie: { secure: false } // Set to true if using HTTPS
+}));
 
 // Homepage with Proxy Form
 app.get('/', (req, res) => {
@@ -53,7 +62,7 @@ app.use('/proxy', (clientRequest, clientResponse) => {
         method: clientRequest.method,
         headers: {
             'User-Agent': clientRequest.headers['user-agent'],
-            'Cookie': clientRequest.headers['cookie'] || '', // Forward cookies for authentication
+            'Cookie': clientRequest.session.cookies || '', // Use session to store cookies
         }
     };
 
@@ -63,6 +72,11 @@ app.use('/proxy', (clientRequest, clientResponse) => {
             const redirectUrl = new URL(serverResponse.headers.location, parsedUrl);
             const proxiedRedirectUrl = `/proxy?url=${encodeURIComponent(redirectUrl.href)}`;
             return clientResponse.redirect(proxiedRedirectUrl);
+        }
+
+        // Store cookies in session
+        if (serverResponse.headers['set-cookie']) {
+            clientRequest.session.cookies = serverResponse.headers['set-cookie'].join('; ');
         }
 
         // Pipe the server response directly to the client response
