@@ -12,27 +12,17 @@ const cookieParser = require('cookie-parser');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// --------------------- Configuration ---------------------
-
-// Whitelist of allowed domains to prevent misuse
-const DOMAIN_WHITELIST = [
-    'jsonplaceholder.typicode.com',
-    'google.com',
-];
-
-// Rate limiting to prevent abuse
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // Limit each IP to 100 requests per windowMs
-    message: 'Too many requests from this IP, please try again later.',
-});
-
 // --------------------- Middleware ---------------------
 
 // Security middleware to set various HTTP headers
 app.use(helmet());
 
-// Rate limiting middleware
+// Rate limiting middleware to prevent abuse
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // Limit each IP to 100 requests per windowMs
+    message: 'Too many requests from this IP, please try again later.',
+});
 app.use(limiter);
 
 // Cookie parsing middleware
@@ -58,17 +48,6 @@ app.get('/', (req, res) => {
 });
 
 // --------------------- Utility Functions ---------------------
-
-/**
- * Checks if a hostname is in the whitelist.
- * @param {string} hostname
- * @returns {boolean}
- */
-function isHostnameAllowed(hostname) {
-    return DOMAIN_WHITELIST.some(allowedDomain => {
-        return hostname === allowedDomain || hostname.endsWith(`.${allowedDomain}`);
-    });
-}
 
 /**
  * Rewrites URLs in HTML content to route through the proxy.
@@ -111,12 +90,9 @@ function rewriteUrls(html, targetUrl) {
         });
     });
 
-    // Optionally, inject a base tag to resolve relative URLs
-    // But since we are rewriting URLs, this might not be necessary
-
     // Handle forms by rewriting the action attribute
     $('form').each(function () {
-        const action = $(this).attr('action') || window.location.href;
+        const action = $(this).attr('action') || targetUrl.href;
         const newAction = rewriteUrl(action);
         $(this).attr('action', newAction);
     });
@@ -173,23 +149,22 @@ function rewriteSetCookie(headers, targetUrl) {
 // --------------------- Proxy Endpoint ---------------------
 
 app.use('/proxy', (clientRequest, clientResponse) => {
-    const targetUrl = clientRequest.query.url;
+    let targetUrl = clientRequest.query.url;
 
     if (!targetUrl) {
         return clientResponse.status(400).send('Missing url parameter.');
     }
 
-    // Validate URL
-    let parsedUrl;
     try {
-        parsedUrl = new URL(targetUrl);
+        // If the URL doesn't have a protocol, prepend 'http://'
+        if (!/^https?:\/\//i.test(targetUrl)) {
+            targetUrl = 'http://' + targetUrl;
+        }
+
+        // Validate URL
+        var parsedUrl = new URL(targetUrl);
     } catch (err) {
         return clientResponse.status(400).send('Invalid URL.');
-    }
-
-    // Security: Check if the hostname is allowed
-    if (!isHostnameAllowed(parsedUrl.hostname)) {
-        return clientResponse.status(403).send('Domain not allowed.');
     }
 
     const protocol = parsedUrl.protocol === 'https:' ? https : http;
@@ -203,7 +178,7 @@ app.use('/proxy', (clientRequest, clientResponse) => {
         headers: {
             ...clientRequest.headers,
             host: parsedUrl.host,
-            // Remove 'accept-encoding' to simplify response processing
+            // To simplify response processing, remove 'accept-encoding'
             'accept-encoding': 'identity',
         },
     };
@@ -228,6 +203,8 @@ app.use('/proxy', (clientRequest, clientResponse) => {
             serverResponse.on('end', () => {
                 try {
                     const rewrittenHtml = rewriteUrls(data, parsedUrl);
+                    // Remove 'Content-Length' since we're modifying the body
+                    delete responseHeaders['content-length'];
                     clientResponse.writeHead(serverResponse.statusCode, responseHeaders);
                     clientResponse.end(rewrittenHtml);
                 } catch (err) {
@@ -242,30 +219,15 @@ app.use('/proxy', (clientRequest, clientResponse) => {
         }
     });
 
-    // Handle various serverRequest errors
+    // Handle serverRequest errors
     serverRequest.on('error', (err) => {
         console.error('Proxy error:', err);
         clientResponse.status(502).send('Bad Gateway.');
     });
 
     // Forward client request headers and body
-    // Handle different HTTP methods by piping the body
     clientRequest.pipe(serverRequest, { end: true });
 });
-
-// --------------------- Handling Redirects ---------------------
-
-// Handle redirects by capturing 3xx status codes and following them through the proxy
-app.use('/proxy', (clientRequest, clientResponse, next) => {
-    // The main proxy logic already handles redirects by the browser
-    // Additional handling can be implemented here if necessary
-    next();
-});
-
-// --------------------- Handling Other HTTP Methods ---------------------
-
-// The proxy setup above already forwards various HTTP methods (GET, POST, PUT, DELETE, etc.)
-// If special handling is needed for specific methods, implement here
 
 // --------------------- Start the Server ---------------------
 
