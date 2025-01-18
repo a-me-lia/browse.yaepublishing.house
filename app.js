@@ -54,25 +54,25 @@ app.use('/proxy', (clientRequest, clientResponse) => {
         headers: {
             'User-Agent': clientRequest.headers['user-agent'],
         },
+        followRedirect: true // Allow following redirects
     };
 
     const serverRequest = parsedSSL.request(options, function (serverResponse) {
         let body = '';
-        if (String(serverResponse.headers['content-type']).indexOf('text/html') !== -1) {
-            serverResponse.on('data', function (chunk) {
-                body += chunk;
-            });
+        serverResponse.on('data', function (chunk) {
+            body += chunk;
+        });
 
-            serverResponse.on('end', function () {
+        serverResponse.on('end', function () {
+            if (serverResponse.statusCode >= 300 && serverResponse.statusCode < 400 && serverResponse.headers.location) {
+                // Handle redirects
+                const redirectUrl = new URL(serverResponse.headers.location, parsedUrl);
+                clientResponse.redirect(redirectUrl.href);
+            } else {
                 clientResponse.writeHead(serverResponse.statusCode, serverResponse.headers);
                 clientResponse.end(body);
-            });
-        } else {
-            serverResponse.pipe(clientResponse, {
-                end: true,
-            });
-            clientResponse.contentType(serverResponse.headers['content-type']);
-        }
+            }
+        });
     });
 
     serverRequest.on('error', (err) => {
