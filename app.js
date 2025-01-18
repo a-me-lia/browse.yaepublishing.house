@@ -46,10 +46,9 @@ app.get('/proxy', async (req, res) => {
     }
 
     console.log(`Attempting to navigate to: ${fullUrl}`);
-
+ 
     try {
         const browser = await puppeteer.launch({
-            executablePath: '/usr/bin/chromium-browser',
             headless: true,
             args: ['--no-sandbox', '--disable-setuid-sandbox']
         });
