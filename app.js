@@ -59,23 +59,19 @@ app.use('/proxy', (clientRequest, clientResponse) => {
 
     // Build headers, including forwarding necessary headers
     const headers = {
+        ...clientRequest.headers,
         'Host': parsedUrl.hostname,
-        'User-Agent': clientRequest.headers['user-agent'] || '',
-        'Accept': clientRequest.headers['accept'] || '*/*',
-        'Accept-Language': clientRequest.headers['accept-language'] || '',
-        'Referer': parsedUrl.href, // Adjust if necessary
+        'Referer': parsedUrl.href,
         'Cookie': clientRequest.session.cookies || '',
     };
 
-    // Include any 'sec-ch-*' headers from the client request
-    for (const headerName in clientRequest.headers) {
-        if (headerName.toLowerCase().startsWith('sec-ch-')) {
-            headers[headerName] = clientRequest.headers[headerName];
-        }
-    }
-
-    // Remove 'accept-encoding' to prevent compressed responses (simplifies parsing)
+    // Remove 'accept-encoding' to prevent compressed responses
     delete headers['accept-encoding'];
+
+    // Modify 'Origin' header if present
+    if (headers['origin']) {
+        headers['origin'] = parsedUrl.origin;
+    }
 
     const options = {
         hostname: parsedUrl.hostname,
@@ -111,6 +107,15 @@ app.use('/proxy', (clientRequest, clientResponse) => {
         serverResponse.on('end', () => {
             const contentType = serverResponse.headers['content-type'] || '';
             const body = Buffer.concat(responseData);
+
+            // Remove security headers that may block content
+            delete serverResponse.headers['content-security-policy'];
+            delete serverResponse.headers['x-content-security-policy'];
+            delete serverResponse.headers['x-webkit-csp'];
+            delete serverResponse.headers['strict-transport-security'];
+            delete serverResponse.headers['x-frame-options'];
+            delete serverResponse.headers['x-xss-protection'];
+            delete serverResponse.headers['x-content-type-options'];
 
             if (contentType.includes('text/html')) {
                 // Parse and modify the HTML content
@@ -159,6 +164,17 @@ app.use('/proxy', (clientRequest, clientResponse) => {
                         return `url('${rewriteUrl(url)}')`;
                     });
                     $(elem).attr('style', styleContent);
+                });
+
+                // Rewrite form actions
+                $('form').each((i, elem) => {
+                    const action = $(elem).attr('action');
+                    if (!action || action.trim() === '') {
+                        // If action is empty or not set, default to current URL
+                        $(elem).attr('action', `/proxy?url=${encodeURIComponent(parsedUrl.href)}`);
+                    } else {
+                        $(elem).attr('action', rewriteUrl(action));
+                    }
                 });
 
                 // Remove Content-Length header since content size may have changed
