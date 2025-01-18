@@ -12,7 +12,6 @@ body {
     font-family: 'Arial', sans-serif;
 }
 
-
 /* Style the container to ensure readability against the background */
 .container {
     background-color: rgba(255, 255, 255, 0.8); /* Semi-transparent background */
@@ -20,7 +19,7 @@ body {
     border-radius: 10px;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     text-align: center;
-    width: 300px;
+    width: 350px; /* Increased width to accommodate new form layout */
 }
 
 h1 {
@@ -35,13 +34,27 @@ form {
     align-items: center;
 }
 
-input[type="text"] {
+.form-group {
+    display: flex;
     width: 100%;
-    padding: 10px;
     margin-bottom: 15px;
+}
+
+.form-group select,
+.form-group input[type="text"] {
+    padding: 10px;
     border: 1px solid #cccccc;
     border-radius: 5px;
     font-size: 1em;
+}
+
+.form-group select {
+    width: 30%; /* Adjusted width */
+    margin-right: 5px;
+}
+
+.form-group input[type="text"] {
+    width: 70%; /* Adjusted width */
 }
 
 button {
