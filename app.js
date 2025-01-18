@@ -1,68 +1,62 @@
+/* eslint-disable @typescript-eslint/no-var-requires */
+// https://stackoverflow.com/a/63602976/470749
 const express = require('express');
-const http = require('http');
-const https = require('https');
-const path = require('path');
-const { URL } = require('url');
 
 const app = express();
-const PORT = 3000; // Listen on port 3000
+const https = require('https');
+const http = require('http');
+// const { response } = require('express');
 
-// Set EJS as templating engine
-app.set('view engine', 'ejs');
-app.set('views', path.join(__dirname, 'views'));
+const targetUrl = process.env.TARGET_URL || 'https://jsonplaceholder.typicode.com'; // Run localtunnel like `lt -s rscraper -p 8080 --print-requests`; then visit https://yourname.loca.lt/todos/1 .
 
-// Serve static files from "public" directory
-app.use(express.static(path.join(__dirname, 'public')));
+const proxyServerPort = process.env.PROXY_SERVER_PORT || 8080;
 
-// Homepage with Proxy Form
-app.get('/', (req, res) => {
-    res.render('index');
-});
+// eslint-disable-next-line max-lines-per-function
+app.use('/', function (clientRequest, clientResponse) {
+  const parsedHost = targetUrl.split('/').splice(2).splice(0, 1).join('/');
+  let parsedPort;
+  let parsedSSL;
+  if (targetUrl.startsWith('https://')) {
+    parsedPort = 443;
+    parsedSSL = https;
+  } else if (targetUrl.startsWith('http://')) {
+    parsedPort = 80;
+    parsedSSL = http;
+  }
+  const options = {
+    hostname: parsedHost,
+    port: parsedPort,
+    path: clientRequest.url,
+    method: clientRequest.method,
+    headers: {
+      'User-Agent': clientRequest.headers['user-agent'],
+    },
+  };
 
-// Proxy Endpoint
-app.use('/proxy', (req, res) => {
-    const targetUrl = req.query.url;
+  const serverRequest = parsedSSL.request(options, function (serverResponse) {
+    let body = '';
+    if (String(serverResponse.headers['content-type']).indexOf('text/html') !== -1) {
+      serverResponse.on('data', function (chunk) {
+        body += chunk;
+      });
 
-    if (!targetUrl) {
-        return res.status(400).send('Missing url parameter.');
+      serverResponse.on('end', function () {
+        // Make changes to HTML files when they're done being read.
+        // body = body.replace(`example`, `Cat!`);
+
+        clientResponse.writeHead(serverResponse.statusCode, serverResponse.headers);
+        clientResponse.end(body);
+      });
+    } else {
+      serverResponse.pipe(clientResponse, {
+        end: true,
+      });
+      clientResponse.contentType(serverResponse.headers['content-type']);
     }
+  });
 
-    // Validate URL
-    let parsedUrl;
-    try {
-        parsedUrl = new URL(targetUrl);
-    } catch (err) {
-        return res.status(400).send('Invalid URL.');
-    }
-
-    const protocol = parsedUrl.protocol === 'https:' ? https : http;
-
-    const options = {
-        hostname: parsedUrl.hostname,
-        port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
-        path: parsedUrl.pathname + (parsedUrl.search || ''),
-        method: req.method,
-        headers: req.headers
-    };
-
-    const proxyReq = protocol.request(options, (proxyRes) => {
-        res.writeHead(proxyRes.statusCode, proxyRes.headers);
-        proxyRes.pipe(res, {
-            end: true
-        });
-    });
-
-    proxyReq.on('error', (err) => {
-        console.error(err);
-        res.status(500).send('Proxy error.');
-    });
-
-    req.pipe(proxyReq, {
-        end: true
-    });
+  serverRequest.end();
 });
 
-// Start the Server
-app.listen(PORT, () => {
-    console.log(`Proxy server is running on port ${PORT}`);
-});
+app.listen(proxyServerPort);
+console.log(`Proxy server listening on port ${proxyServerPort}`);
