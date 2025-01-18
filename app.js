@@ -38,6 +38,13 @@ app.use('/proxy', (clientRequest, clientResponse) => {
         return clientResponse.status(400).send('Missing url parameter.');
     }
 
+    // Decode the target URL
+    try {
+        targetUrl = decodeURIComponent(targetUrl);
+    } catch (err) {
+        return clientResponse.status(400).send('Invalid URL encoding.');
+    }
+
     // If targetUrl doesn't have protocol, prepend protocol
     if (!/^https?:\/\//i.test(targetUrl)) {
         if (protocol) {
@@ -130,8 +137,9 @@ app.use('/proxy', (clientRequest, clientResponse) => {
                 function rewriteUrl(url) {
                     try {
                         const absoluteUrl = new URL(url, parsedUrl);
-                        let newUrl = `/proxy?url=${encodeURIComponent(absoluteUrl.href)}`;
-                        return newUrl;
+                        const encodedUrl = encodeURIComponent(absoluteUrl.href);
+                        const proxiedUrl = `/proxy?url=${encodedUrl}`;
+                        return proxiedUrl;
                     } catch (e) {
                         return url; // Return original URL if parsing fails
                     }
