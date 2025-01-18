@@ -37,49 +37,63 @@ app.get('/proxy', async (req, res) => {
         return res.status(400).send('Missing url parameter.');
     }
 
-    // Decode the target URL
-    let fullUrl;
-    try {
-        fullUrl = decodeURIComponent(targetUrl);
-    } catch (err) {
-        return res.status(400).send('Invalid URL encoding.');
-    }
+    // Decode the target URL if necessary
+    let fullUrl = targetUrl;
 
     // Prepend protocol if not present
     if (!/^https?:\/\//i.test(fullUrl)) {
         fullUrl = protocol + fullUrl;
     }
 
+    console.log(`Attempting to navigate to: ${fullUrl}`);
+
     try {
         const browser = await puppeteer.launch({
+            executablePath: '/usr/bin/chromium-browser',
+            headless: true,
             args: ['--no-sandbox', '--disable-setuid-sandbox']
         });
 
         const page = await browser.newPage();
 
-        // Set viewport size if needed
-        // await page.setViewport({ width: 1280, height: 800 });
+        // Set user agent
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
+            'AppleWebKit/537.36 (KHTML, like Gecko) ' +
+            'Chrome/112.0.0.0 Safari/537.36');
 
-        // Set user agent and headers from the client request
-        await page.setUserAgent(req.headers['user-agent'] || 'Mozilla/5.0');
+        // Bypass CSP
+        await page.setBypassCSP(true);
 
-        // Set cookies from session
-        if (req.session.cookies) {
-            await page.setCookie(...req.session.cookies);
-        }
+        // Set up error logging
+        page.on('error', err => console.error('Page error:', err));
+        page.on('pageerror', pageErr => console.error('Page error:', pageErr));
+        page.on('requestfailed', request => {
+            console.error(`Request failed: ${request.url()} - ${request.failure().errorText}`);
+        });
 
-        // Intercept requests to handle resource loading
+        // Intercept requests
         await page.setRequestInterception(true);
         page.on('request', interceptedRequest => {
-            // Allow all requests to proceed
-            interceptedRequest.continue();
+            const requestUrl = interceptedRequest.url();
+
+            // Abort /generate_204 requests to prevent ERR_ABORTED
+            if (requestUrl.endsWith('/generate_204')) {
+                interceptedRequest.abort();
+            } else {
+                interceptedRequest.continue();
+            }
         });
 
         // Navigate to the target URL
-        await page.goto(fullUrl, {
-            waitUntil: 'networkidle0',
-            timeout: 60000 // Adjust timeout as needed
-        });
+        try {
+            await page.goto(fullUrl, {
+                waitUntil: 'networkidle2',
+                timeout: 60000
+            });
+        } catch (navError) {
+            console.error(`Navigation error: ${navError}`);
+            throw navError;
+        }
 
         // Get cookies and save them to the session
         const cookies = await page.cookies();
@@ -94,14 +108,11 @@ app.get('/proxy', async (req, res) => {
         // Rewrite URLs in the content
         content = rewriteContent(content, fullUrl);
 
-        // Remove Content-Security-Policy header
-        res.removeHeader('Content-Security-Policy');
-
         // Send the modified content to the client
         res.send(content);
     } catch (error) {
         console.error('Proxy error:', error);
-        res.status(500).send('An error occurred while processing your request.');
+        res.status(500).send(`An error occurred while processing your request: ${error.message}`);
     }
 });
 
