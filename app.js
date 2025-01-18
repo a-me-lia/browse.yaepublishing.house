@@ -1,9 +1,8 @@
 /* eslint-disable @typescript-eslint/no-var-requires */
 const express = require('express');
 const path = require('path');
-const https = require('https');
-const http = require('http');
 const session = require('express-session');
+const puppeteer = require('puppeteer');
 const cheerio = require('cheerio');
 
 const app = express();
@@ -30,185 +29,137 @@ app.get('/', (req, res) => {
 });
 
 // Proxy Endpoint
-app.use('/proxy', (clientRequest, clientResponse) => {
-    let targetUrl = clientRequest.query.url;
-    let protocol = clientRequest.query.protocol;
+app.get('/proxy', async (req, res) => {
+    const targetUrl = req.query.url;
+    const protocol = req.query.protocol || 'http://';
 
     if (!targetUrl) {
-        return clientResponse.status(400).send('Missing url parameter.');
+        return res.status(400).send('Missing url parameter.');
     }
 
     // Decode the target URL
+    let fullUrl;
     try {
-        targetUrl = decodeURIComponent(targetUrl);
+        fullUrl = decodeURIComponent(targetUrl);
     } catch (err) {
-        return clientResponse.status(400).send('Invalid URL encoding.');
+        return res.status(400).send('Invalid URL encoding.');
     }
 
-    // If targetUrl doesn't have protocol, prepend protocol
-    if (!/^https?:\/\//i.test(targetUrl)) {
-        if (protocol) {
-            targetUrl = protocol + targetUrl;
-        } else {
-            targetUrl = 'http://' + targetUrl;
-        }
+    // Prepend protocol if not present
+    if (!/^https?:\/\//i.test(fullUrl)) {
+        fullUrl = protocol + fullUrl;
     }
 
-    // Validate URL
-    let parsedUrl;
     try {
-        parsedUrl = new URL(targetUrl);
-    } catch (err) {
-        return clientResponse.status(400).send('Invalid URL.');
-    }
-
-    const protocolModule = parsedUrl.protocol === 'https:' ? https : http;
-
-    // Build headers, including forwarding necessary headers
-    const headers = {
-        ...clientRequest.headers,
-        'Host': parsedUrl.hostname,
-        'Referer': parsedUrl.href,
-        'Cookie': clientRequest.session.cookies || '',
-    };
-
-    // Remove 'accept-encoding' to prevent compressed responses
-    delete headers['accept-encoding'];
-
-    // Modify 'Origin' header if present
-    if (headers['origin']) {
-        headers['origin'] = parsedUrl.origin;
-    }
-
-    const options = {
-        hostname: parsedUrl.hostname,
-        port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
-        path: parsedUrl.pathname + parsedUrl.search,
-        method: clientRequest.method,
-        headers: headers,
-    };
-
-    const serverRequest = protocolModule.request(options, function (serverResponse) {
-        // Handle redirects
-        if (serverResponse.statusCode >= 300 && serverResponse.statusCode < 400 && serverResponse.headers.location) {
-            const redirectUrl = new URL(serverResponse.headers.location, parsedUrl);
-            let proxiedRedirectUrl = `/proxy?url=${encodeURIComponent(redirectUrl.href)}`;
-            return clientResponse.redirect(proxiedRedirectUrl);
-        }
-
-        // Store cookies in session
-        if (serverResponse.headers['set-cookie']) {
-            const newCookies = serverResponse.headers['set-cookie'].map(cookie => cookie.split(';')[0]);
-            const existingCookies = clientRequest.session.cookies ? clientRequest.session.cookies.split('; ') : [];
-            const mergedCookies = [...existingCookies, ...newCookies];
-            // Remove duplicate cookies
-            clientRequest.session.cookies = Array.from(new Set(mergedCookies)).join('; ');
-        }
-
-        let responseData = [];
-
-        serverResponse.on('data', (chunk) => {
-            responseData.push(chunk);
+        const browser = await puppeteer.launch({
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
         });
 
-        serverResponse.on('end', () => {
-            const contentType = serverResponse.headers['content-type'] || '';
-            const body = Buffer.concat(responseData);
+        const page = await browser.newPage();
 
-            // Remove security headers that may block content
-            delete serverResponse.headers['content-security-policy'];
-            delete serverResponse.headers['x-content-security-policy'];
-            delete serverResponse.headers['x-webkit-csp'];
-            delete serverResponse.headers['strict-transport-security'];
-            delete serverResponse.headers['x-frame-options'];
-            delete serverResponse.headers['x-xss-protection'];
-            delete serverResponse.headers['x-content-type-options'];
+        // Set viewport size if needed
+        // await page.setViewport({ width: 1280, height: 800 });
 
-            if (contentType.includes('text/html')) {
-                // Parse and modify the HTML content
-                let htmlContent = body.toString();
+        // Set user agent and headers from the client request
+        await page.setUserAgent(req.headers['user-agent'] || 'Mozilla/5.0');
 
-                // Remove <base> tags to prevent incorrect URL resolutions
-                htmlContent = htmlContent.replace(/<base[^>]*>/gi, '');
+        // Set cookies from session
+        if (req.session.cookies) {
+            await page.setCookie(...req.session.cookies);
+        }
 
-                const $ = cheerio.load(htmlContent);
+        // Intercept requests to handle resource loading
+        await page.setRequestInterception(true);
+        page.on('request', interceptedRequest => {
+            // Allow all requests to proceed
+            interceptedRequest.continue();
+        });
 
-                // Function to rewrite URLs to go through the proxy
-                function rewriteUrl(url) {
-                    try {
-                        const absoluteUrl = new URL(url, parsedUrl);
-                        const encodedUrl = encodeURIComponent(absoluteUrl.href);
-                        const proxiedUrl = `/proxy?url=${encodedUrl}`;
-                        return proxiedUrl;
-                    } catch (e) {
-                        return url; // Return original URL if parsing fails
-                    }
-                }
+        // Navigate to the target URL
+        await page.goto(fullUrl, {
+            waitUntil: 'networkidle0',
+            timeout: 60000 // Adjust timeout as needed
+        });
 
-                // List of attributes containing URLs to rewrite
-                const attributesToRewrite = ['href', 'src', 'action', 'data-href', 'data-src', 'data-url'];
+        // Get cookies and save them to the session
+        const cookies = await page.cookies();
+        req.session.cookies = cookies;
 
-                attributesToRewrite.forEach(attr => {
-                    $(`[${attr}]`).each((i, elem) => {
-                        const value = $(elem).attr(attr);
-                        if (value && !value.startsWith('javascript:') && !value.startsWith('data:')) {
-                            $(elem).attr(attr, rewriteUrl(value));
-                        }
-                    });
-                });
+        // Get the page content
+        let content = await page.content();
 
-                // Rewrite CSS URLs in style tags and attributes
-                $('style').each((i, elem) => {
-                    let cssContent = $(elem).html();
-                    cssContent = cssContent.replace(/url\(['"]?([^'"\)]+)['"]?\)/g, (match, url) => {
-                        return `url('${rewriteUrl(url)}')`;
-                    });
-                    $(elem).html(cssContent);
-                });
+        // Close the browser
+        await browser.close();
 
-                $('[style]').each((i, elem) => {
-                    let styleContent = $(elem).attr('style');
-                    styleContent = styleContent.replace(/url\(['"]?([^'"\)]+)['"]?\)/g, (match, url) => {
-                        return `url('${rewriteUrl(url)}')`;
-                    });
-                    $(elem).attr('style', styleContent);
-                });
+        // Rewrite URLs in the content
+        content = rewriteContent(content, fullUrl);
 
-                // Rewrite form actions
-                $('form').each((i, elem) => {
-                    const action = $(elem).attr('action');
-                    if (!action || action.trim() === '') {
-                        // If action is empty or not set, default to current URL
-                        $(elem).attr('action', `/proxy?url=${encodeURIComponent(parsedUrl.href)}`);
-                    } else {
-                        $(elem).attr('action', rewriteUrl(action));
-                    }
-                });
+        // Remove Content-Security-Policy header
+        res.removeHeader('Content-Security-Policy');
 
-                // Remove Content-Length header since content size may have changed
-                delete serverResponse.headers['content-length'];
+        // Send the modified content to the client
+        res.send(content);
+    } catch (error) {
+        console.error('Proxy error:', error);
+        res.status(500).send('An error occurred while processing your request.');
+    }
+});
 
-                // Send the modified HTML to the client
-                clientResponse.writeHead(serverResponse.statusCode, serverResponse.headers);
-                clientResponse.end($.html());
-            } else {
-                // For non-HTML content, send as-is
-                clientResponse.writeHead(serverResponse.statusCode, serverResponse.headers);
-                clientResponse.end(body);
+// Function to rewrite content
+function rewriteContent(htmlContent, baseUrl) {
+    const $ = cheerio.load(htmlContent);
+
+    function rewriteUrl(url) {
+        try {
+            const absoluteUrl = new URL(url, baseUrl);
+            const encodedUrl = encodeURIComponent(absoluteUrl.href);
+            return `/proxy?url=${encodedUrl}`;
+        } catch (e) {
+            return url;
+        }
+    }
+
+    // List of attributes to rewrite
+    const attributesToRewrite = ['href', 'src', 'action', 'data-href', 'data-src', 'data-url'];
+
+    attributesToRewrite.forEach(attr => {
+        $(`[${attr}]`).each((i, elem) => {
+            const value = $(elem).attr(attr);
+            if (value && !value.startsWith('javascript:') && !value.startsWith('data:') && !value.startsWith('#')) {
+                $(elem).attr(attr, rewriteUrl(value));
             }
         });
     });
 
-    serverRequest.on('error', (err) => {
-        console.error(err);
-        if (!clientResponse.headersSent) {
-            clientResponse.status(500).send('Proxy error.');
+    // Rewrite CSS URLs in style tags and attributes
+    $('style').each((i, elem) => {
+        let cssContent = $(elem).html();
+        cssContent = cssContent.replace(/url\(['"]?([^'"\)]+)['"]?\)/g, (match, url) => {
+            return `url('${rewriteUrl(url)}')`;
+        });
+        $(elem).html(cssContent);
+    });
+
+    $('[style]').each((i, elem) => {
+        let styleContent = $(elem).attr('style');
+        styleContent = styleContent.replace(/url\(['"]?([^'"\)]+)['"]?\)/g, (match, url) => {
+            return `url('${rewriteUrl(url)}')`;
+        });
+        $(elem).attr('style', styleContent);
+    });
+
+    // Rewrite form actions
+    $('form').each((i, elem) => {
+        const action = $(elem).attr('action');
+        if (!action || action.trim() === '') {
+            $(elem).attr('action', `/proxy?url=${encodeURIComponent(baseUrl)}`);
+        } else {
+            $(elem).attr('action', rewriteUrl(action));
         }
     });
 
-    // Pipe the client request body to the server request
-    clientRequest.pipe(serverRequest, { end: true });
-});
+    return $.html();
+}
 
 // Start the Server
 app.listen(PORT, () => {
